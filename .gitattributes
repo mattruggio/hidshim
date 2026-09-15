@@ -1,0 +1,6 @@
+# Keep line endings deterministic across machines.
+* text=auto eol=lf
+
+# Markdown here is intentionally not hard wrapped. One line per paragraph, and
+# the editor or renderer handles the wrapping.
+*.md text eol=lf

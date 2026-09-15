@@ -1,0 +1,8 @@
+# Build output
+src/hid.dll
+src/test-hid-shim.exe
+src/installed.sha256
+
+# Local machine state
+*.bak
+*.log
