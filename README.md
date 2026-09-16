@@ -1,6 +1,7 @@
 # hidshim
 
 [![build](https://github.com/mattruggio/hidshim/actions/workflows/build.yml/badge.svg)](https://github.com/mattruggio/hidshim/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/mattruggio/hidshim?label=release&sort=semver)](https://github.com/mattruggio/hidshim/releases/latest)
 
 Hide HID devices from a single Windows process, without touching the rest of the machine.
 
