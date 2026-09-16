@@ -205,6 +205,8 @@ src/test-hid-shim.c           the smoke test
 
 Run the **build** workflow from the Actions tab with a `version` of `1.0.0`. It validates the version, builds, and only then tags the commit and publishes the release, so a failed build cannot leave a tag pointing at something that does not compile. It refuses a version that is already tagged.
 
+The release job publishes the artifact the build job verified rather than compiling a second time, so the DLL you download is the one that passed the export check. Only that job holds a token that can write; the build job that runs on every pull request is read only.
+
 Pushing a `v*` tag by hand does the same thing, minus the tagging step.
 
 Nothing infers the version, you choose it. The public contract here is small, which makes that easy to be disciplined about:

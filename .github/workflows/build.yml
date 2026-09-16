@@ -1,11 +1,19 @@
 name: build
 
-# Runs the same scripts/Build-HidShim.ps1 a reader runs locally. That is
-# deliberate: CI must not be able to pass while a local build fails, so there
-# is no second build recipe here to drift out of step with the documented one.
+# Two jobs, one workflow, on purpose.
 #
-# Pushing a tag such as v1.0.0 additionally publishes a release with an
-# attested binary. See the release notes in README.md for how to verify it.
+# Splitting release into its own workflow file would mean a second copy of the
+# toolchain setup and the build, living in a file that runs a handful of times
+# a year while this one runs on every push. That second copy would rot unseen.
+# Two jobs give the same separation without the second recipe.
+#
+# The split that matters is permissions: build runs read only, and only the
+# release job can push a tag or publish. The release job also consumes the
+# artifact build verified rather than compiling again, so the published DLL is
+# provably the one that passed the export check.
+#
+# Releasing: run this workflow from the Actions tab with a version such as
+# 1.0.0, or push a v* tag by hand.
 
 on:
   push:
@@ -36,10 +44,14 @@ jobs:
   build:
     runs-on: windows-latest
 
+    # Read only. This job runs on every pull request, and nothing it does
+    # needs a token that can write to the repository.
     permissions:
-      contents: write      # create the release on a tag
-      id-token: write      # sign the provenance attestation
-      attestations: write  # record it
+      contents: read
+
+    outputs:
+      tag: ${{ steps.rel.outputs.tag }}
+      publish: ${{ steps.rel.outputs.publish }}
 
     steps:
       - uses: actions/checkout@v4
@@ -107,6 +119,12 @@ jobs:
       # Windows PowerShell 5.1, which is what the scripts target and what the
       # README tells readers to use. Running it under pwsh here would test a
       # configuration nobody is asked to run.
+      #
+      # Note what this does and does not prove. It compiles the shim, checks
+      # all 47 exports against the runner's real hid.dll, and runs the smoke
+      # test, which is what catches a broken naked forwarder. It cannot
+      # exercise the filter policy, because a runner has no HID devices
+      # attached. That part only has teeth on a real machine.
       - name: Build and verify
         shell: powershell
         run: .\scripts\Build-HidShim.ps1
@@ -135,46 +153,71 @@ jobs:
             src/hid-shim.ini
           if-no-files-found: error
 
-      # After the build, deliberately. A tag created before verification could
-      # end up pointing at a commit that does not compile, and a tag is the one
-      # thing here that is meant to be permanent.
+  release:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+
+    # windows-latest rather than a cheaper Linux runner so the packaging runs
+    # in the same environment as everything else here, backslashes included.
+    # This job compiles nothing, so it is short regardless.
+    runs-on: windows-latest
+
+    permissions:
+      contents: write      # push the tag, create the release
+      id-token: write      # sign the provenance attestation
+      attestations: write  # record it
+
+    env:
+      TAG: ${{ needs.build.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The binary that was verified, not a second build of the same source.
+      # This is what lets the attestation mean what it appears to mean.
+      - name: Download the verified build
+        uses: actions/download-artifact@v4
+        with:
+          name: hidshim-i386
+          path: dist
+
+      # After the build, deliberately. A tag created earlier could end up
+      # pointing at a commit that does not compile, and a tag is the one thing
+      # here that is meant to be permanent.
       #
       # Pushing a tag with GITHUB_TOKEN does not retrigger this workflow, so
       # tagging from inside it cannot loop.
       - name: Tag the commit
-        if: steps.rel.outputs.publish == 'true' && github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
-          $tag = '${{ steps.rel.outputs.tag }}'
-
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
-          git tag -a $tag -m "hidshim $tag"
-          if ($LASTEXITCODE -ne 0) { throw "Could not create tag $tag" }
+          git tag -a $env:TAG -m "hidshim $env:TAG"
+          if ($LASTEXITCODE -ne 0) { throw "Could not create tag $env:TAG" }
 
-          git push origin $tag
-          if ($LASTEXITCODE -ne 0) { throw "Could not push tag $tag" }
+          git push origin $env:TAG
+          if ($LASTEXITCODE -ne 0) { throw "Could not push tag $env:TAG" }
 
-          Write-Host "Tagged $env:GITHUB_SHA as $tag"
+          Write-Host "Tagged $env:GITHUB_SHA as $env:TAG"
 
       - name: Attest build provenance
-        if: steps.rel.outputs.publish == 'true'
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: src/hid.dll
+          subject-path: dist/hid.dll
 
       - name: Package and publish the release
-        if: steps.rel.outputs.publish == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
-          $tag   = '${{ steps.rel.outputs.tag }}'
+          $tag   = $env:TAG
           $stage = Join-Path $env:RUNNER_TEMP 'pkg'
 
           New-Item -ItemType Directory -Path $stage -Force | Out-Null
-          Copy-Item 'src\hid.dll','src\hid-shim.ini','LICENSE','README.md' $stage
+          Copy-Item 'dist\hid.dll','dist\hid-shim.ini','LICENSE','README.md' $stage
 
           $zip = "hidshim-$tag-i386.zip"
           Compress-Archive -Path "$stage\*" -DestinationPath $zip -Force
@@ -182,8 +225,8 @@ jobs:
           # Hashes for anyone who would rather compare by hand than use
           # gh attestation verify.
           @(
-            '{0}  hid.dll' -f (Get-FileHash 'src\hid.dll' -Algorithm SHA256).Hash
-            '{0}  {1}'     -f (Get-FileHash $zip          -Algorithm SHA256).Hash, $zip
+            '{0}  hid.dll' -f (Get-FileHash 'dist\hid.dll' -Algorithm SHA256).Hash
+            '{0}  {1}'     -f (Get-FileHash $zip           -Algorithm SHA256).Hash, $zip
           ) | Set-Content 'SHA256SUMS.txt' -Encoding ASCII
 
           Get-Content 'SHA256SUMS.txt'
@@ -214,7 +257,7 @@ jobs:
             '--title', "hidshim $tag"
             '--notes-file', 'NOTES.md'
           )
-          if ('${{ inputs.prerelease }}' -eq 'true') { $ghArgs += '--prerelease' }
+          if ($env:PRERELEASE -eq 'true') { $ghArgs += '--prerelease' }
 
           gh release create $tag @ghArgs
           if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
