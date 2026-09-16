@@ -1,0 +1,146 @@
+name: build
+
+# Runs the same scripts/Build-HidShim.ps1 a reader runs locally. That is
+# deliberate: CI must not be able to pass while a local build fails, so there
+# is no second build recipe here to drift out of step with the documented one.
+#
+# Pushing a tag such as v1.0.0 additionally publishes a release with an
+# attested binary. See the release notes in README.md for how to verify it.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Matches the toolchain the README tells you to install with winget, so the
+  # released DLL and a locally built one come from the same compiler.
+  LLVM_MINGW_VERSION: '20260616'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    permissions:
+      contents: write      # create the release on a tag
+      id-token: write      # sign the provenance attestation
+      attestations: write  # record it
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 162 MB, so it is worth not downloading on every run.
+      - name: Cache llvm-mingw
+        id: toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\llvm-mingw
+          key: llvm-mingw-msvcrt-x86_64-${{ env.LLVM_MINGW_VERSION }}
+
+      - name: Install llvm-mingw
+        if: steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $v   = $env:LLVM_MINGW_VERSION
+          $zip = Join-Path $env:RUNNER_TEMP 'llvm-mingw.zip'
+          $url = "https://github.com/mstorsjo/llvm-mingw/releases/download/$v/llvm-mingw-$v-msvcrt-x86_64.zip"
+
+          Write-Host "Downloading $url"
+          curl.exe -sSfL -o $zip $url
+
+          Expand-Archive -Path $zip -DestinationPath C:\ -Force
+          Rename-Item -Path "C:\llvm-mingw-$v-msvcrt-x86_64" -NewName 'llvm-mingw'
+
+      - name: Put the toolchain on PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\llvm-mingw\bin'
+
+      # Windows PowerShell 5.1, which is what the scripts target and what the
+      # README tells readers to use. Running it under pwsh here would test a
+      # configuration nobody is asked to run.
+      - name: Build and verify
+        shell: powershell
+        run: .\scripts\Build-HidShim.ps1
+
+      # The build script already fails on a wrong architecture or a missing
+      # export. This is a second, independent assertion, because a silently
+      # 64 bit or export-shy DLL is the one failure a user cannot see.
+      - name: Assert the result is a 32 bit DLL
+        shell: pwsh
+        run: |
+          $b  = [IO.File]::ReadAllBytes('src\hid.dll')
+          $pe = [BitConverter]::ToInt32($b, 0x3c)
+          $machine = [BitConverter]::ToUInt16($b, $pe + 4)
+
+          if ($machine -ne 0x14c) {
+            throw ('Expected machine 0x014C (i386), got 0x{0:X4}' -f $machine)
+          }
+          Write-Host 'Machine is 0x014C (i386).'
+
+      - name: Upload the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: hidshim-i386
+          path: |
+            src/hid.dll
+            src/hid-shim.ini
+          if-no-files-found: error
+
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: src/hid.dll
+
+      - name: Package and publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag   = $env:GITHUB_REF_NAME
+          $stage = Join-Path $env:RUNNER_TEMP 'pkg'
+
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item 'src\hid.dll','src\hid-shim.ini','LICENSE','README.md' $stage
+
+          $zip = "hidshim-$tag-i386.zip"
+          Compress-Archive -Path "$stage\*" -DestinationPath $zip -Force
+
+          # Hashes for anyone who would rather compare by hand than use
+          # gh attestation verify.
+          @(
+            '{0}  hid.dll' -f (Get-FileHash 'src\hid.dll' -Algorithm SHA256).Hash
+            '{0}  {1}'     -f (Get-FileHash $zip          -Algorithm SHA256).Hash, $zip
+          ) | Set-Content 'SHA256SUMS.txt' -Encoding ASCII
+
+          Get-Content 'SHA256SUMS.txt'
+
+          # Built as an array rather than a here-string on purpose: a PowerShell
+          # here-string needs its body and terminator at column zero, which
+          # would break straight out of this YAML block scalar.
+          $run   = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $fence = [string][char]0x60 * 3
+
+          $notes = @(
+            "Built by [this workflow run]($run) from commit ``$env:GITHUB_SHA``."
+            ''
+            'The DLL is 32 bit (i386) and carries a signed build provenance attestation. Verify it before trusting it:'
+            ''
+            $fence
+            "gh attestation verify hid.dll --repo $env:GITHUB_REPOSITORY"
+            $fence
+            ''
+            'Building it yourself from source is still the shortest path to trusting it, and takes about a minute. See the README.'
+          ) -join "`n"
+
+          Set-Content -Path 'NOTES.md' -Value $notes -Encoding UTF8
+
+          gh release create $tag $zip 'SHA256SUMS.txt' `
+            --title "hidshim $tag" `
+            --notes-file 'NOTES.md'

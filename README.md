@@ -1,5 +1,7 @@
 # hidshim
 
+[![build](https://github.com/mattruggio/hidshim/actions/workflows/build.yml/badge.svg)](https://github.com/mattruggio/hidshim/actions/workflows/build.yml)
+
 Hide HID devices from a single Windows process, without touching the rest of the machine.
 
 This is a proxy `hid.dll`. You drop it next to an executable, name the devices that executable is allowed to see, and every other HID device becomes invisible to it. Nothing is installed, no driver, no service, nothing in the background. Uninstalling is deleting two files.
@@ -68,6 +70,20 @@ Then close the terminal and open a new one, so the compiler is on your `PATH`. W
 Visual Studio can build this too, but its 32 bit support is an optional component that is easy to miss, so this repo standardises on LLVM-MinGW.
 
 Use **Windows PowerShell 5.1** for the scripts. PowerShell 7 will mostly work, but `Show-HidDevices.ps1` leans on WMI in ways that behave differently.
+
+### Or skip the compiler
+
+Tagged releases ship a prebuilt `hid.dll` on the [releases page](https://github.com/mattruggio/hidshim/releases), built by the [build workflow](.github/workflows/build.yml) from the commit the tag points at.
+
+Understand the tradeoff before you take it. This is an unsigned DLL that proxies a system DLL, downloaded from the internet, which is structurally indistinguishable from malware and which you would be placing next to a program you run. Building it yourself takes about a minute and removes that question entirely, which is why the compiler is listed above rather than below.
+
+If you do use a release, verify it rather than assuming:
+
+```powershell
+gh attestation verify hid.dll --repo mattruggio/hidshim
+```
+
+That checks a signed build provenance attestation, proving the binary came out of that workflow, in this repository, from a specific commit. `SHA256SUMS.txt` is published alongside if you would rather compare hashes by hand. You still have to supply your own `hid-shim.ini`, so read step 2 either way.
 
 ---
 
