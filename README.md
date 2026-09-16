@@ -201,6 +201,24 @@ src/test-hid-shim.c           the smoke test
 
 ---
 
+## Releasing
+
+Run the **build** workflow from the Actions tab with a `version` of `1.0.0`. It validates the version, builds, and only then tags the commit and publishes the release, so a failed build cannot leave a tag pointing at something that does not compile. It refuses a version that is already tagged.
+
+Pushing a `v*` tag by hand does the same thing, minus the tagging step.
+
+Nothing infers the version, you choose it. The public contract here is small, which makes that easy to be disciplined about:
+
+| Bump | When |
+|---|---|
+| Major | An ini key or a script parameter is renamed or removed |
+| Minor | A new capability that existing configs ignore, such as `[Log] Path` |
+| Patch | A fix that needs no config change |
+
+The 47 exports are not ours to version, since Windows sets them. That does imply one thing to watch: if a future Windows release adds an export to the real `hid.dll`, the build starts failing on machines that have it, and fixing that is a patch release whether we like it or not.
+
+---
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).

@@ -13,6 +13,16 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version as major.minor.patch, for example 1.0.0. Leave empty to build without releasing.'
+        required: false
+        type: string
+      prerelease:
+        description: 'Mark the release as a prerelease'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -33,6 +43,40 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Decided before anything expensive runs, so a bad version string or a
+      # reused tag fails in seconds rather than after a toolchain download and
+      # a build.
+      - name: Work out the release target
+        id: rel
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $tag = ''
+
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            # Tag was pushed by hand. Take it as given.
+            $tag = $env:GITHUB_REF_NAME
+          }
+          elseif ($env:INPUT_VERSION -and $env:INPUT_VERSION.Trim()) {
+            $v = $env:INPUT_VERSION.Trim().TrimStart('v')
+
+            if ($v -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+              throw "Version '$v' is not major.minor.patch. Examples: 1.0.0, 1.2.3, 1.0.0-rc.1"
+            }
+            $tag = "v$v"
+
+            if (git ls-remote --tags origin "refs/tags/$tag") {
+              throw "Tag $tag already exists. Pick a new version rather than moving a published one."
+            }
+          }
+
+          $publish = [bool]$tag
+          Write-Host "tag='$tag'  publish=$publish"
+
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$tag"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "publish=$($publish.ToString().ToLower())"
 
       # 162 MB, so it is worth not downloading on every run.
       - name: Cache llvm-mingw
@@ -91,19 +135,42 @@ jobs:
             src/hid-shim.ini
           if-no-files-found: error
 
+      # After the build, deliberately. A tag created before verification could
+      # end up pointing at a commit that does not compile, and a tag is the one
+      # thing here that is meant to be permanent.
+      #
+      # Pushing a tag with GITHUB_TOKEN does not retrigger this workflow, so
+      # tagging from inside it cannot loop.
+      - name: Tag the commit
+        if: steps.rel.outputs.publish == 'true' && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.rel.outputs.tag }}'
+
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git tag -a $tag -m "hidshim $tag"
+          if ($LASTEXITCODE -ne 0) { throw "Could not create tag $tag" }
+
+          git push origin $tag
+          if ($LASTEXITCODE -ne 0) { throw "Could not push tag $tag" }
+
+          Write-Host "Tagged $env:GITHUB_SHA as $tag"
+
       - name: Attest build provenance
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.rel.outputs.publish == 'true'
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: src/hid.dll
 
       - name: Package and publish the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.rel.outputs.publish == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag   = $env:GITHUB_REF_NAME
+          $tag   = '${{ steps.rel.outputs.tag }}'
           $stage = Join-Path $env:RUNNER_TEMP 'pkg'
 
           New-Item -ItemType Directory -Path $stage -Force | Out-Null
@@ -141,6 +208,13 @@ jobs:
 
           Set-Content -Path 'NOTES.md' -Value $notes -Encoding UTF8
 
-          gh release create $tag $zip 'SHA256SUMS.txt' `
-            --title "hidshim $tag" `
-            --notes-file 'NOTES.md'
+          $ghArgs = @(
+            $zip
+            'SHA256SUMS.txt'
+            '--title', "hidshim $tag"
+            '--notes-file', 'NOTES.md'
+          )
+          if ('${{ inputs.prerelease }}' -eq 'true') { $ghArgs += '--prerelease' }
+
+          gh release create $tag @ghArgs
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
