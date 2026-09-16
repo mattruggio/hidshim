@@ -203,7 +203,9 @@ src/test-hid-shim.c           the smoke test
 
 ## Releasing
 
-Run the **build** workflow from the Actions tab with a `version` of `1.0.0`. It validates the version, builds, and only then tags the commit and publishes the release, so a failed build cannot leave a tag pointing at something that does not compile. It refuses a version that is already tagged.
+Run the **build** workflow from the Actions tab with a `version` of `1.0.0`. It validates the version, builds, and only then creates the tag and the release together, so a failed build cannot leave a tag pointing at something that does not compile, and a failed publish cannot leave a tag pointing at nothing. It refuses a version that is already tagged.
+
+Build provenance attestation requires the repository to be public. GitHub rejects it outright for user-owned private repositories, and the release step fails with it.
 
 The release job publishes the artifact the build job verified rather than compiling a second time, so the DLL you download is the one that passed the export check. Only that job holds a token that can write; the build job that runs on every pull request is read only.
 
