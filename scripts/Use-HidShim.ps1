@@ -11,7 +11,9 @@
     It changes nothing outside the target process. The keyboard keeps working
     everywhere else, and a crash cannot leave the machine in a broken state.
 
-    Build it first with Build-HidShim.ps1.
+    Get it first: download a release and extract it, or build it with
+    Build-HidShim.ps1. Either way the DLL lives in ..\src relative to this
+    script.
 
       -Install   copy the shim and its configuration into the target directory
       -Remove    delete both, so the target uses the system hid.dll again
@@ -146,7 +148,7 @@ if ($running) {
 if ($Install) {
     foreach ($required in @($srcDll, $srcIni)) {
         if (-not (Test-Path $required)) {
-            throw "Missing: $required. Run Build-HidShim.ps1 first."
+            throw "Missing: $required. Build it with Build-HidShim.ps1, or extract a release zip and run this from its scripts directory."
         }
     }
 

@@ -205,8 +205,14 @@ jobs:
           $tag   = $env:TAG
           $stage = Join-Path $env:RUNNER_TEMP 'pkg'
 
-          New-Item -ItemType Directory -Path $stage -Force | Out-Null
-          Copy-Item 'dist\hid.dll','dist\hid-shim.ini','LICENSE','README.md' $stage
+          # Mirrors the repository layout on purpose. The scripts default to
+          # looking for the DLL in ..\src, so an extracted release behaves
+          # exactly like a clone and the README needs one set of instructions
+          # rather than two.
+          New-Item -ItemType Directory -Path "$stage\src","$stage\scripts" -Force | Out-Null
+          Copy-Item 'dist\hid.dll','dist\hid-shim.ini' "$stage\src"
+          Copy-Item 'scripts\*.ps1' "$stage\scripts"
+          Copy-Item 'LICENSE','README.md' $stage
 
           $zip = "hidshim-$tag-i386.zip"
           Compress-Archive -Path "$stage\*" -DestinationPath $zip -Force
@@ -232,10 +238,10 @@ jobs:
             'The DLL is 32 bit (i386) and carries a signed build provenance attestation. Verify it before trusting it:'
             ''
             $fence
-            "gh attestation verify hid.dll --repo $env:GITHUB_REPOSITORY"
+            "gh attestation verify src\hid.dll --repo $env:GITHUB_REPOSITORY"
             $fence
             ''
-            'Building it yourself from source is still the shortest path to trusting it, and takes about a minute. See the README.'
+            'Extract it anywhere and follow the README from step 2. It has the same layout as a clone, so the scripts work unchanged. Building it yourself is still the shortest path to trusting it, and takes about a minute.'
           ) -join "`n"
 
           Set-Content -Path 'NOTES.md' -Value $notes -Encoding UTF8
