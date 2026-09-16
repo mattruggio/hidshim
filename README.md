@@ -25,6 +25,15 @@ cd C:\path\to\hidshim-v0.1.0-i386
 
 **Every command below is written to run from there, not from inside `scripts\`.** The scripts themselves resolve their own paths, so they work from any directory, but the `.\scripts\Something.ps1` prefix only resolves from the folder root.
 
+Windows refuses to run scripts at all by default, and separately marks anything extracted from a downloaded zip as untrusted. Clear both, for this window only:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+Get-ChildItem -Recurse | Unblock-File
+```
+
+`-Scope Process` lasts until you close that window, needs no admin rights, and changes nothing permanently. Skip it and you get `running scripts is disabled on this system`. Skip `Unblock-File` and the scripts stay blocked even after the policy is relaxed, because the mark is a separate mechanism.
+
 It is an unsigned DLL that proxies a system DLL, which is structurally indistinguishable from malware. Verify it rather than trusting it:
 
 ```powershell
@@ -114,10 +123,11 @@ Close the terminal and open a new one, so the compiler is on your `PATH`. Window
 ```powershell
 git clone https://github.com/mattruggio/hidshim.git
 cd hidshim
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\scripts\Build-HidShim.ps1
 ```
 
-Expect `Smoke test passed.`, `Build verified.` and `i386`. Then continue from step 2 above.
+Expect `Smoke test passed.`, `Build verified.` and `i386`. Then continue from step 2 above. A clone carries no download mark, so `Unblock-File` is not needed here.
 
 The build is not just a compile. It reads the export table of the DLL it just produced and compares it against your real `C:\Windows\SysWOW64\hid.dll`, failing on any missing export. That matters more than it looks: DirectInput resolves every HID function by name with `GetProcAddress`, so a missing or decorated export does not fail loudly, it just makes DirectInput quietly believe the function is unavailable. It then runs a smoke test that loads the shim and enumerates devices the way DirectInput does, which is the only part that proves the naked forwarders actually execute.
 
