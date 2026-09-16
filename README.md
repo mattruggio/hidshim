@@ -20,7 +20,7 @@ Any DirectInput era application can hit this, and RGB software, virtual HID buse
 Download `hidshim-<version>-i386.zip` from the [latest release](https://github.com/mattruggio/hidshim/releases/latest) and extract it anywhere. Then open PowerShell in the extracted folder, the one containing `scripts\` and `src\`:
 
 ```powershell
-cd C:\path\to\hidshim-v0.1.0-i386
+cd C:\path\to\hidshim-<version>-i386
 ```
 
 **Every command below is written to run from there, not from inside `scripts\`.** The scripts themselves resolve their own paths, so they work from any directory, but the `.\scripts\Something.ps1` prefix only resolves from the folder root.
